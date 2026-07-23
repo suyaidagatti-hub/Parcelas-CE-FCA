@@ -183,7 +183,8 @@ else:
         is_base = file_name in base_files
         
         mod_time = os.path.getmtime(file_path)
-        fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y %H:%M hs")
+        # Se formatea la fecha únicamente en día/mes/año (DD/MM/YYYY)
+        fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y")
         
         c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
         
@@ -191,7 +192,7 @@ else:
         c2.caption("📍 Lote Base (Campo Escuela)" if is_base else "🔹 Parcela Añadida")
         c3.text(fecha_carga)
         
-        # Lógica de protección para la capa base
+        # Protección de borrado para capa base
         if is_base:
             c4.caption("🔒 Protegido")
         else:
