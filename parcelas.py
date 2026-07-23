@@ -1,6 +1,7 @@
 import os
 import zipfile
 import tempfile
+import datetime
 import pandas as pd
 import streamlit as st
 import geopandas as gpd
@@ -75,33 +76,33 @@ if uploaded_file is not None:
         with open(save_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         st.sidebar.success(f"Guardado exitosamente: `{uploaded_file.name}`")
+        st.rerun()
     else:
         st.sidebar.info(f"El archivo `{uploaded_file.name}` ya existe en la base de datos.")
 
 
 # -----------------------------------------------------------------------------
-# LECTURA Y ORDENAMIENTO DE CAPAS (Z-INDEX)
+# GESTIÓN Y ORDENAMIENTO DE CAPAS
 # -----------------------------------------------------------------------------
 spatial_files = [
     f for f in os.listdir(DATA_DIR) 
     if f.lower().endswith(".kml") or f.lower().endswith(".kmz")
 ]
 
-# Separar capa BASE de capas SUBIDAS para forzar el orden de renderizado
+# Separar la capa base de los lotes del campo escuela de las parcelas cargadas
 base_files = [f for f in spatial_files if "campo" in f.lower() or "lote" in f.lower()]
 uploaded_files = [f for f in spatial_files if f not in base_files]
 
-# El orden final garantiza que 'base' se dibuje primero (abajo) y 'subidas' al final (arriba)
 ordered_files = base_files + uploaded_files
 
-# Mapa base con vista satelital por defecto
+# Mapa base
 m = folium.Map(location=[-31.42, -64.18], zoom_start=13, tiles="OpenStreetMap")
 folium.TileLayer("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", attr="Google", name="Google Satélite").add_to(m)
 
 gdfs_to_bounds = []
 
 if ordered_files:
-    st.sidebar.subheader("🗂️ Capas Disponibles")
+    st.sidebar.subheader("🗂️ Visibilidad de Capas")
     
     for file_name in ordered_files:
         file_path = os.path.join(DATA_DIR, file_name)
@@ -118,17 +119,15 @@ if ordered_files:
             if not gdf.empty:
                 gdfs_to_bounds.append(gdf)
                 
-                # Configuración de colores y estilos según si es base o subida
                 if is_base:
-                    style_color = "#28a745"  # Verde para capa base
+                    style_color = "#28a745"  # Verde para base
                     fill_opacity = 0.25
                     weight = 2
                 else:
-                    style_color = "#ff3333"  # Rojo/Naranja para parcelas subidas (mayor contraste)
+                    style_color = "#ff3333"  # Rojo/Naranja para parcelas subidas
                     fill_opacity = 0.55
                     weight = 3
 
-                # Crear capa GeoJSON
                 folium.GeoJson(
                     gdf,
                     name=file_name,
@@ -138,7 +137,6 @@ if ordered_files:
                         'weight': w,
                         'fillOpacity': opacity
                     },
-                    # Efecto de resaltado al pasar el mouse por arriba
                     highlight_function=lambda x: {
                         'weight': 4,
                         'fillOpacity': 0.85
@@ -149,7 +147,7 @@ if ordered_files:
                     ) if len(gdf.columns) > 1 else None
                 ).add_to(m)
 
-# Centrar el mapa en el área combinada de las capas visibles
+# Centrar mapa automáticamente
 if gdfs_to_bounds:
     combined_gdf = gpd.GeoDataFrame(pd.concat(gdfs_to_bounds, ignore_index=True))
     bounds = combined_gdf.total_bounds
@@ -157,7 +155,49 @@ if gdfs_to_bounds:
 
 folium.LayerControl().add_to(m)
 
+
 # -----------------------------------------------------------------------------
 # MOSTRAR MAPA
 # -----------------------------------------------------------------------------
-st_folium(m, width="100%", height=600)
+st_folium(m, width="100%", height=550)
+
+
+# -----------------------------------------------------------------------------
+# REGISTRO Y GESTIÓN DE PARCELAS (DEBAJO DEL MAPA)
+# -----------------------------------------------------------------------------
+st.markdown("---")
+st.subheader("📋 Registro de Parcelas Cargar / Base de Datos")
+
+if not spatial_files:
+    st.info("No hay capas ni parcelas cargadas en la base de datos.")
+else:
+    # Encabezados de la tabla custom en Streamlit
+    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+    col1.markdown("**Nombre del Archivo**")
+    col2.markdown("**Tipo de Capa**")
+    col3.markdown("**Fecha de Carga**")
+    col4.markdown("**Acción**")
+    st.markdown("---")
+
+    for file_name in spatial_files:
+        file_path = os.path.join(DATA_DIR, file_name)
+        is_base = file_name in base_files
+        
+        # Obtener fecha de modificación/creación del archivo
+        mod_time = os.path.getmtime(file_path)
+        fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y %H:%M hs")
+        
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+        
+        c1.text(f"📄 {file_name}")
+        c2.caption("📍 Lote Base (Campo Escuela)" if is_base else "🔹 Parcela Añadida")
+        c3.text(fecha_carga)
+        
+        # Botón para borrar el archivo (con key única por archivo)
+        if c4.button("🗑️ Borrar", key=f"del_{file_name}"):
+            try:
+                os.remove(file_path)
+                st.toast(f"Se eliminó `{file_name}` correctamente.", icon="✅")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al borrar el archivo: {e}")
