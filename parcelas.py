@@ -1,6 +1,6 @@
 import os
 import zipfile
-import base64
+import datetime
 import pandas as pd
 import streamlit as st
 import geopandas as gpd
@@ -22,11 +22,11 @@ st.title("🚜 Editor de Parcelas - Campo Escuela")
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
 # -----------------------------------------------------------------------------
 # CONEXIÓN CON GITHUB API
 # -----------------------------------------------------------------------------
 def get_github_repo():
-    """Obtiene la instancia del repositorio mediante el Token de Secrets."""
     try:
         token = st.secrets["GITHUB_TOKEN"]
         repo_name = st.secrets["GITHUB_REPO"]
@@ -37,7 +37,6 @@ def get_github_repo():
         return None
 
 def upload_to_github(file_bytes, filename):
-    """Sube o actualiza un archivo en la carpeta data/ del repositorio en GitHub."""
     repo = get_github_repo()
     if not repo:
         return False
@@ -46,12 +45,10 @@ def upload_to_github(file_bytes, filename):
     commit_message = f"Add new parcel: {filename} via Streamlit Editor"
 
     try:
-        # Si el archivo ya existe en GitHub, lo actualizamos pasándole el SHA
         contents = repo.get_contents(path_in_repo)
         repo.update_file(path_in_repo, commit_message, file_bytes, contents.sha)
     except GithubException as e:
         if e.status == 404:
-            # Si no existe, lo creamos
             repo.create_file(path_in_repo, commit_message, file_bytes)
         else:
             st.error(f"Error al subir a GitHub: {e}")
@@ -60,7 +57,6 @@ def upload_to_github(file_bytes, filename):
     return True
 
 def delete_from_github(filename):
-    """Elimina un archivo de la carpeta data/ del repositorio en GitHub."""
     repo = get_github_repo()
     if not repo:
         return False
@@ -78,12 +74,49 @@ def delete_from_github(filename):
 
 
 # -----------------------------------------------------------------------------
+# LOGIN CON CREDENCIALES DESDE CSV
+# -----------------------------------------------------------------------------
+def verificar_credenciales(usuario, clave) -> bool:
+    if not os.path.exists("credenciales.csv"):
+        st.error("No se encontró el archivo `credenciales.csv` en la raíz del proyecto.")
+        return False
+    
+    try:
+        df_creds = pd.read_csv("credenciales.csv")
+        match = df_creds[(df_creds['usuario'].astype(str) == usuario.strip()) & 
+                         (df_creds['contraseña'].astype(str) == clave.strip())]
+        return not match.empty
+    except Exception as e:
+        st.error(f"Error al leer credenciales.csv: {e}")
+        return False
+
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.subheader("🔑 Iniciar Sesión para Editar")
+    col_usr, col_pwd = st.columns(2)
+    with col_usr:
+        user_input = st.text_input("Usuario:")
+    with col_pwd:
+        pass_input = st.text_input("Contraseña:", type="password")
+        
+    if st.button("Ingresar"):
+        if verificar_credenciales(user_input, pass_input):
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Usuario o contraseña incorrectos.")
+    st.stop()
+
+
+# -----------------------------------------------------------------------------
 # LECTURA DE DATOS KML / KMZ
 # -----------------------------------------------------------------------------
 def load_spatial_data(file_source) -> gpd.GeoDataFrame:
     try:
-        filename = file_source
-        ext = os.path.splitext(filename)[1].lower()
+        ext = os.path.splitext(file_source)[1].lower()
 
         if ext == ".kml":
             gdf = gpd.read_file(file_source, driver="KML")
@@ -102,46 +135,6 @@ def load_spatial_data(file_source) -> gpd.GeoDataFrame:
 
 
 # -----------------------------------------------------------------------------
-# LOGIN CON CREDENCIALES DESDE CSV
-# -----------------------------------------------------------------------------
-def verificar_credenciales(usuario, clave) -> bool:
-    """Verifica si el usuario y la contraseña coinciden con credenciales.csv"""
-    if not os.path.exists("credenciales.csv"):
-        st.error("No se encontró el archivo `credenciales.csv` en la raíz del proyecto.")
-        return False
-    
-    try:
-        df_creds = pd.read_csv("credenciales.csv")
-        # Aseguramos que busque coincidencia de usuario y clave exactos
-        match = df_creds[(df_creds['usuario'].astype(str) == usuario.strip()) & 
-                         (df_creds['contraseña'].astype(str) == clave.strip())]
-        return not match.empty
-    except Exception as e:
-        st.error(f"Error al leer credenciales.csv: {e}")
-        return False
-
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    st.subheader("🔑 Iniciar Sesión para Editar")
-    
-    col_usr, col_pwd = st.columns(2)
-    with col_usr:
-        user_input = st.text_input("Usuario:")
-    with col_pwd:
-        pass_input = st.text_input("Contraseña:", type="password")
-        
-    if st.button("Ingresar"):
-        if verificar_credenciales(user_input, pass_input):
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Usuario o contraseña incorrectos.")
-    st.stop()
-
-# -----------------------------------------------------------------------------
 # PANEL LATERAL: SUBIR PARCELA
 # -----------------------------------------------------------------------------
 st.sidebar.title("🛠️ Panel de Gestión")
@@ -154,7 +147,6 @@ if uploaded_file is not None:
     filename = uploaded_file.name
     file_bytes = uploaded_file.getvalue()
     
-    # 1. Guardar copia local temporal
     local_path = os.path.join(DATA_DIR, filename)
     with open(local_path, "wb") as f:
         f.write(file_bytes)
@@ -165,6 +157,7 @@ if uploaded_file is not None:
             if success:
                 st.sidebar.success(f"¡{filename} guardado con éxito en GitHub!")
                 st.rerun()
+
 
 # -----------------------------------------------------------------------------
 # LECTURA Y VISUALIZACIÓN DE CAPAS
@@ -202,18 +195,40 @@ if ordered_files:
             gdf = load_spatial_data(file_path)
             if not gdf.empty:
                 gdfs_to_bounds.append(gdf)
-                style_color = "#28a745" if is_base else "#ff3333"
                 
-                folium.GeoJson(
+                style_color = "#28a745" if is_base else "#ff3333"
+                fill_opacity = 0.25 if is_base else 0.55
+                weight = 2 if is_base else 3
+
+                # Selección de campos para el Tooltip (Pop-up al pasar el mouse)
+                tooltip_fields = [c for c in gdf.columns if c.lower() != 'geometry']
+                
+                geojson_layer = folium.GeoJson(
                     gdf,
                     name=file_name,
-                    style_function=lambda x, color=style_color: {
+                    style_function=lambda x, color=style_color, opacity=fill_opacity, w=weight: {
                         'fillColor': color,
                         'color': color,
-                        'weight': 2,
-                        'fillOpacity': 0.4
+                        'weight': w,
+                        'fillOpacity': opacity
+                    },
+                    highlight_function=lambda x: {
+                        'weight': 4,
+                        'fillOpacity': 0.85
                     }
-                ).add_to(m)
+                )
+                
+                # Restaurar Pop-up/Tooltip al pasar el cursor
+                if tooltip_fields:
+                    geojson_layer.add_child(
+                        folium.GeoJsonTooltip(
+                            fields=tooltip_fields[:3],  # Muestra los primeros 3 atributos (Name, Description, etc.)
+                            aliases=[f"{col}:" for col in tooltip_fields[:3]],
+                            sticky=True
+                        )
+                    )
+                
+                geojson_layer.add_to(m)
 
 if gdfs_to_bounds:
     combined_gdf = gpd.GeoDataFrame(pd.concat(gdfs_to_bounds, ignore_index=True))
@@ -225,28 +240,43 @@ st_folium(m, width="100%", height=500)
 
 
 # -----------------------------------------------------------------------------
-# SECCIÓN DE ELIMINACIÓN DE PARCELAS
+# SECCIÓN DE ADMINISTRACIÓN Y FECHA DE CARGA (RESTAURADA)
 # -----------------------------------------------------------------------------
 st.markdown("---")
-st.subheader("🗑️ Administrar y Eliminar Parcelas Subidas")
+st.subheader("📋 Detalle de Parcelas Cargadas")
 
-if not uploaded_files:
-    st.info("No hay parcelas adicionales para eliminar.")
+if not spatial_files:
+    st.info("No hay capas cargadas en la carpeta de datos.")
 else:
-    for file_name in uploaded_files:
-        col1, col2 = st.columns([4, 1])
-        col1.text(f"🔹 Parcela: {file_name}")
+    col1, col2, col3, col4 = st.columns([4, 3, 3, 2])
+    col1.markdown("**Nombre del Archivo**")
+    col2.markdown("**Tipo de Capa**")
+    col3.markdown("**Fecha de Carga / Modificación**")
+    col4.markdown("**Acción**")
+    st.markdown("---")
+
+    for file_name in spatial_files:
+        file_path = os.path.join(DATA_DIR, file_name)
+        is_base = file_name in base_files
         
-        if col2.button("❌ Eliminar", key=f"del_{file_name}"):
-            with st.spinner("Eliminando parcela de GitHub..."):
-                # 1. Borrar de GitHub
-                success = delete_from_github(file_name)
-                
-                # 2. Borrar copia local si existe
-                local_path = os.path.join(DATA_DIR, file_name)
-                if os.path.exists(local_path):
-                    os.remove(local_path)
-                
-                if success:
-                    st.success(f"Parcela `{file_name}` eliminada correctamente.")
-                    st.rerun()
+        # Obtener fecha de modificación del archivo
+        mod_time = os.path.getmtime(file_path)
+        fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y - %H:%M hs")
+        
+        c1, c2, c3, c4 = st.columns([4, 3, 3, 2])
+        c1.text(f"📄 {file_name}")
+        c2.caption("📍 Lote Base (Campo Escuela)" if is_base else "🔹 Parcela Integrada")
+        c3.text(fecha_carga)
+        
+        if not is_base:
+            if c4.button("❌ Eliminar", key=f"del_{file_name}"):
+                with st.spinner("Eliminando parcela de GitHub..."):
+                    success = delete_from_github(file_name)
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    
+                    if success:
+                        st.success(f"Parcela `{file_name}` eliminada correctamente.")
+                        st.rerun()
+        else:
+            c4.caption("🔒 Protegida")
