@@ -1,177 +1,172 @@
 import os
 import zipfile
-import tempfile
-import datetime
+import base64
 import pandas as pd
 import streamlit as st
 import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
+from github import Github, GithubException
 
 # -----------------------------------------------------------------------------
-# CONFIGURACIÓN DE PÁGINA
+# CONFIGURACIÓN PÁGINA
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Tablero GIS - Campo Escuela",
-    page_icon="🌱",
+    page_title="Gestor Campo Escuela (Editor)",
+    page_icon="🚜",
     layout="wide"
 )
 
-# -----------------------------------------------------------------------------
-# AUTENTICACIÓN Y MANEJO DE SESIÓN
-# -----------------------------------------------------------------------------
-def check_credentials(username, password):
-    """
-    Verifica si el usuario y la contraseña coinciden con las del archivo credenciales.csv
-    """
-    creds_path = "credenciales.csv"
-    if not os.path.exists(creds_path):
-        st.error("⚠️ No se encontró el archivo `credenciales.csv` en el repositorio.")
-        return False
-    
-    try:
-        df_creds = pd.read_csv(creds_path, dtype=str)
-        # Normalizar nombres de columnas por si acaso hay espacios
-        df_creds.columns = df_creds.columns.str.strip().str.lower()
-        
-        user_match = df_creds[
-            (df_creds['usuario'].str.strip() == username.strip()) & 
-            (df_creds['contraseña'].str.strip() == password.strip())
-        ]
-        return not user_match.empty
-    except Exception as e:
-        st.error(f"Error al verificar credenciales: {e}")
-        return False
+st.title("🚜 Editor de Parcelas - Campo Escuela")
 
-
-# Estado de sesión inicial
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "username" not in st.session_state:
-    st.session_state.username = ""
-
-
-# -----------------------------------------------------------------------------
-# PANTALLA DE LOGIN
-# -----------------------------------------------------------------------------
-if not st.session_state.logged_in:
-    st.title("🔒 Control de Acceso - Tablero GIS Campo Escuela")
-    st.markdown("Por favor, ingresa tus credenciales autorizadas para acceder a la plataforma.")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        with st.form("login_form"):
-            user_input = st.text_input("Usuario")
-            pass_input = st.text_input("Contraseña", type="password")
-            submit_button = st.form_submit_button("Ingresar")
-            
-            if submit_button:
-                if check_credentials(user_input, pass_input):
-                    st.session_state.logged_in = True
-                    st.session_state.username = user_input
-                    st.success("¡Inicio de sesión exitoso!")
-                    st.rerun()
-                else:
-                    st.error("Usuario o contraseña incorrectos. Intenta de nuevo.")
-    
-    st.stop()  # Detiene la ejecución del resto del código si no está autenticado
-
-
-# -----------------------------------------------------------------------------
-# APLICACIÓN PRINCIPAL (SOLO ACCESIBLE CON LOGIN EXITOSO)
-# -----------------------------------------------------------------------------
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Encabezado del Tablero
-st.title("🌱 Visualizador de Parcelas - Campo Escuela")
-st.markdown(f"Bienvenido/a **{st.session_state.username}**. Visualización e integración de capas de lotes y parcelas KML/KMZ.")
+# -----------------------------------------------------------------------------
+# CONEXIÓN CON GITHUB API
+# -----------------------------------------------------------------------------
+def get_github_repo():
+    """Obtiene la instancia del repositorio mediante el Token de Secrets."""
+    try:
+        token = st.secrets["GITHUB_TOKEN"]
+        repo_name = st.secrets["GITHUB_REPO"]
+        g = Github(token)
+        return g.get_repo(repo_name)
+    except Exception as e:
+        st.error(f"Error al conectar con la API de GitHub: {e}")
+        return None
 
-# Botón de Cerrar Sesión en Sidebar
-st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state.username}`")
-if st.sidebar.button("🚪 Cerrar Sesión"):
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.rerun()
+def upload_to_github(file_bytes, filename):
+    """Sube o actualiza un archivo en la carpeta data/ del repositorio en GitHub."""
+    repo = get_github_repo()
+    if not repo:
+        return False
 
-st.sidebar.markdown("---")
+    path_in_repo = f"data/{filename}"
+    commit_message = f"Add new parcel: {filename} via Streamlit Editor"
+
+    try:
+        # Si el archivo ya existe en GitHub, lo actualizamos pasándole el SHA
+        contents = repo.get_contents(path_in_repo)
+        repo.update_file(path_in_repo, commit_message, file_bytes, contents.sha)
+    except GithubException as e:
+        if e.status == 404:
+            # Si no existe, lo creamos
+            repo.create_file(path_in_repo, commit_message, file_bytes)
+        else:
+            st.error(f"Error al subir a GitHub: {e}")
+            return False
+
+    return True
+
+def delete_from_github(filename):
+    """Elimina un archivo de la carpeta data/ del repositorio en GitHub."""
+    repo = get_github_repo()
+    if not repo:
+        return False
+
+    path_in_repo = f"data/{filename}"
+    commit_message = f"Delete parcel: {filename} via Streamlit Editor"
+
+    try:
+        contents = repo.get_contents(path_in_repo)
+        repo.delete_file(path_in_repo, commit_message, contents.sha)
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar de GitHub: {e}")
+        return False
 
 
 # -----------------------------------------------------------------------------
-# FUNCIÓN PARA LEER KML / KMZ
+# LECTURA DE DATOS KML / KMZ
 # -----------------------------------------------------------------------------
 def load_spatial_data(file_source) -> gpd.GeoDataFrame:
     try:
-        if hasattr(file_source, "name"):
-            filename = file_source.name
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-                tmp.write(file_source.getvalue())
-                tmp_path = tmp.name
-        else:
-            filename = file_source
-            tmp_path = file_source
-
+        filename = file_source
         ext = os.path.splitext(filename)[1].lower()
 
         if ext == ".kml":
-            gdf = gpd.read_file(tmp_path, driver="KML")
+            gdf = gpd.read_file(file_source, driver="KML")
         elif ext == ".kmz":
-            with zipfile.ZipFile(tmp_path, "r") as z:
+            with zipfile.ZipFile(file_source, "r") as z:
                 kml_filename = [f for f in z.namelist() if f.endswith(".kml")][0]
                 with z.open(kml_filename) as kml_file:
                     gdf = gpd.read_file(kml_file, driver="KML")
         else:
             return gpd.GeoDataFrame()
 
-        if hasattr(file_source, "name") and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
         return gdf
-
     except Exception as e:
-        st.error(f"Error al leer `{getattr(file_source, 'name', file_source)}`: {e}")
+        st.error(f"Error al leer `{file_source}`: {e}")
         return gpd.GeoDataFrame()
 
 
 # -----------------------------------------------------------------------------
-# SIDEBAR: Carga de Nuevos Archivos
+# LOGIN SENCILLO
 # -----------------------------------------------------------------------------
-st.sidebar.header("📁 Cargar Nueva Parcela")
-uploaded_file = st.sidebar.file_uploader("Sube un archivo KML o KMZ", type=["kml", "kmz"])
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.subheader("🔑 Iniciar Sesión para Editar")
+    password = st.text_input("Contraseña de administrador:", type="password")
+    if st.button("Ingresar"):
+        # Podés cambiar esta clave o usar st.secrets["ADMIN_PASSWORD"]
+        if password == "agro2026":
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Contraseña incorrecta")
+    st.stop()
+
+
+# -----------------------------------------------------------------------------
+# PANEL LATERAL: SUBIR PARCELA
+# -----------------------------------------------------------------------------
+st.sidebar.title("🛠️ Panel de Gestión")
+uploaded_file = st.sidebar.file_uploader(
+    "Cargar nueva parcela (KML / KMZ)", 
+    type=["kml", "kmz"]
+)
 
 if uploaded_file is not None:
-    save_path = os.path.join(DATA_DIR, uploaded_file.name)
+    filename = uploaded_file.name
+    file_bytes = uploaded_file.getvalue()
     
-    if not os.path.exists(save_path):
-        with open(save_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.sidebar.success(f"Guardado exitosamente: `{uploaded_file.name}`")
-        st.rerun()
-    else:
-        st.sidebar.info(f"El archivo `{uploaded_file.name}` ya existe en la base de datos.")
-
+    # 1. Guardar copia local temporal
+    local_path = os.path.join(DATA_DIR, filename)
+    with open(local_path, "wb") as f:
+        f.write(file_bytes)
+        
+    if st.sidebar.button("💾 Guardar Parcela en GitHub"):
+        with st.spinner("Subiendo parcela al repositorio de GitHub..."):
+            success = upload_to_github(file_bytes, filename)
+            if success:
+                st.sidebar.success(f"¡{filename} guardado con éxito en GitHub!")
+                st.rerun()
 
 # -----------------------------------------------------------------------------
-# GESTIÓN Y ORDENAMIENTO DE CAPAS
+# LECTURA Y VISUALIZACIÓN DE CAPAS
 # -----------------------------------------------------------------------------
-spatial_files = [
-    f for f in os.listdir(DATA_DIR) 
-    if f.lower().endswith(".kml") or f.lower().endswith(".kmz")
-]
+spatial_files = []
+if os.path.exists(DATA_DIR):
+    spatial_files = [
+        f for f in os.listdir(DATA_DIR) 
+        if f.lower().endswith(".kml") or f.lower().endswith(".kmz")
+    ]
 
 base_files = [f for f in spatial_files if "campo" in f.lower() or "lote" in f.lower()]
 uploaded_files = [f for f in spatial_files if f not in base_files]
-
 ordered_files = base_files + uploaded_files
 
-# Mapa base
 m = folium.Map(location=[-31.42, -64.18], zoom_start=13, tiles="OpenStreetMap")
 folium.TileLayer("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", attr="Google", name="Google Satélite").add_to(m)
 
 gdfs_to_bounds = []
 
 if ordered_files:
-    st.sidebar.subheader("🗂️ Visibilidad de Capas")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Capas visibles:")
     
     for file_name in ordered_files:
         file_path = os.path.join(DATA_DIR, file_name)
@@ -184,89 +179,53 @@ if ordered_files:
         
         if show_layer:
             gdf = load_spatial_data(file_path)
-            
             if not gdf.empty:
                 gdfs_to_bounds.append(gdf)
+                style_color = "#28a745" if is_base else "#ff3333"
                 
-                if is_base:
-                    style_color = "#28a745"
-                    fill_opacity = 0.25
-                    weight = 2
-                else:
-                    style_color = "#ff3333"
-                    fill_opacity = 0.55
-                    weight = 3
-
                 folium.GeoJson(
                     gdf,
                     name=file_name,
-                    style_function=lambda x, color=style_color, opacity=fill_opacity, w=weight: {
+                    style_function=lambda x, color=style_color: {
                         'fillColor': color,
                         'color': color,
-                        'weight': w,
-                        'fillOpacity': opacity
-                    },
-                    highlight_function=lambda x: {
-                        'weight': 4,
-                        'fillOpacity': 0.85
-                    },
-                    tooltip=folium.GeoJsonTooltip(
-                        fields=list(gdf.columns.drop('geometry', errors='ignore'))[:3],
-                        sticky=True
-                    ) if len(gdf.columns) > 1 else None
+                        'weight': 2,
+                        'fillOpacity': 0.4
+                    }
                 ).add_to(m)
 
-# Centrar mapa automáticamente
 if gdfs_to_bounds:
     combined_gdf = gpd.GeoDataFrame(pd.concat(gdfs_to_bounds, ignore_index=True))
     bounds = combined_gdf.total_bounds
     m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
 folium.LayerControl().add_to(m)
+st_folium(m, width="100%", height=500)
 
 
 # -----------------------------------------------------------------------------
-# MOSTRAR MAPA
-# -----------------------------------------------------------------------------
-st_folium(m, width="100%", height=550)
-
-
-# -----------------------------------------------------------------------------
-# REGISTRO Y GESTIÓN DE PARCELAS (DEBAJO DEL MAPA)
+# SECCIÓN DE ELIMINACIÓN DE PARCELAS
 # -----------------------------------------------------------------------------
 st.markdown("---")
-st.subheader("📋 Registro de Parcelas Cargadas / Base de Datos")
+st.subheader("🗑️ Administrar y Eliminar Parcelas Subidas")
 
-if not spatial_files:
-    st.info("No hay capas ni parcelas cargadas en la base de datos.")
+if not uploaded_files:
+    st.info("No hay parcelas adicionales para eliminar.")
 else:
-    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-    col1.markdown("**Nombre del Archivo**")
-    col2.markdown("**Tipo de Capa**")
-    col3.markdown("**Fecha de Carga**")
-    col4.markdown("**Acción**")
-    st.markdown("---")
-
-    for file_name in spatial_files:
-        file_path = os.path.join(DATA_DIR, file_name)
-        is_base = file_name in base_files
+    for file_name in uploaded_files:
+        col1, col2 = st.columns([4, 1])
+        col1.text(f"🔹 Parcela: {file_name}")
         
-        mod_time = os.path.getmtime(file_path)
-        fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y")
-        
-        c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
-        
-        c1.text(f"📄 {file_name}")
-        c2.caption("📍 Lote Base (Campo Escuela)" if is_base else "🔹 Parcela Añadida")
-        c3.text(fecha_carga)
-        
-        if is_base:
-            c4.caption("🔒 Protegido")
-        else:
-            if c4.button("🗑️ Borrar", key=f"del_{file_name}"):
-                try:
-                    os.remove(file_path)
-                    st.toast(f"Se eliminó `{file_name}` correctamente.", icon="✅")
+        if col2.button("❌ Eliminar", key=f"del_{file_name}"):
+            with st.spinner("Eliminando parcela de GitHub..."):
+                # 1. Borrar de GitHub
+                success = delete_from_github(file_name)
+                
+                # 2. Borrar copia local si existe
+                local_path = os.path.join(DATA_DIR, file_name)
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+                
+                if success:
+                    st.success(f"Parcela `{file_name}` eliminada correctamente.")
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Error al borrar el archivo: {e}")
