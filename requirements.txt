@@ -1,6 +1,5 @@
 streamlit
-streamlit-folium
-folium
 geopandas
-pyogrio
-pandas
+folium
+streamlit-folium
+PyGithub
