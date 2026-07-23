@@ -114,7 +114,7 @@ def verificar_credenciales(usuario, clave) -> bool:
         df_creds = pd.read_csv("credenciales.csv")
         # Aseguramos que busque coincidencia de usuario y clave exactos
         match = df_creds[(df_creds['usuario'].astype(str) == usuario.strip()) & 
-                         (df_creds['password'].astype(str) == clave.strip())]
+                         (df_creds['contraseña'].astype(str) == clave.strip())]
         return not match.empty
     except Exception as e:
         st.error(f"Error al leer credenciales.csv: {e}")
