@@ -17,20 +17,90 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🌱 Visualizador de Parcelas - Campo Escuela")
-st.markdown("Visualización e integración de capas de lotes y parcelas en formato KML y KMZ.")
+# -----------------------------------------------------------------------------
+# AUTENTICACIÓN Y MANEJO DE SESIÓN
+# -----------------------------------------------------------------------------
+def check_credentials(username, password):
+    """
+    Verifica si el usuario y la contraseña coinciden con las del archivo credenciales.csv
+    """
+    creds_path = "credenciales.csv"
+    if not os.path.exists(creds_path):
+        st.error("⚠️ No se encontró el archivo `credenciales.csv` en el repositorio.")
+        return False
+    
+    try:
+        df_creds = pd.read_csv(creds_path, dtype=str)
+        # Normalizar nombres de columnas por si acaso hay espacios
+        df_creds.columns = df_creds.columns.str.strip().str.lower()
+        
+        user_match = df_creds[
+            (df_creds['usuario'].str.strip() == username.strip()) & 
+            (df_creds['contraseña'].str.strip() == password.strip())
+        ]
+        return not user_match.empty
+    except Exception as e:
+        st.error(f"Error al verificar credenciales: {e}")
+        return False
 
+
+# Estado de sesión inicial
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+
+# -----------------------------------------------------------------------------
+# PANTALLA DE LOGIN
+# -----------------------------------------------------------------------------
+if not st.session_state.logged_in:
+    st.title("🔒 Control de Acceso - Tablero GIS Campo Escuela")
+    st.markdown("Por favor, ingresa tus credenciales autorizadas para acceder a la plataforma.")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form"):
+            user_input = st.text_input("Usuario")
+            pass_input = st.text_input("Contraseña", type="password")
+            submit_button = st.form_submit_button("Ingresar")
+            
+            if submit_button:
+                if check_credentials(user_input, pass_input):
+                    st.session_state.logged_in = True
+                    st.session_state.username = user_input
+                    st.success("¡Inicio de sesión exitoso!")
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos. Intenta de nuevo.")
+    
+    st.stop()  # Detiene la ejecución del resto del código si no está autenticado
+
+
+# -----------------------------------------------------------------------------
+# APLICACIÓN PRINCIPAL (SOLO ACCESIBLE CON LOGIN EXITOSO)
+# -----------------------------------------------------------------------------
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# Encabezado del Tablero
+st.title("🌱 Visualizador de Parcelas - Campo Escuela")
+st.markdown(f"Bienvenido/a **{st.session_state.username}**. Visualización e integración de capas de lotes y parcelas KML/KMZ.")
+
+# Botón de Cerrar Sesión en Sidebar
+st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state.username}`")
+if st.sidebar.button("🚪 Cerrar Sesión"):
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.rerun()
+
+st.sidebar.markdown("---")
 
 
 # -----------------------------------------------------------------------------
 # FUNCIÓN PARA LEER KML / KMZ
 # -----------------------------------------------------------------------------
 def load_spatial_data(file_source) -> gpd.GeoDataFrame:
-    """
-    Lee archivos KML o KMZ y los convierte en un GeoDataFrame.
-    """
     try:
         if hasattr(file_source, "name"):
             filename = file_source.name
@@ -89,7 +159,6 @@ spatial_files = [
     if f.lower().endswith(".kml") or f.lower().endswith(".kmz")
 ]
 
-# Separar la capa base de los lotes del campo escuela de las parcelas cargadas
 base_files = [f for f in spatial_files if "campo" in f.lower() or "lote" in f.lower()]
 uploaded_files = [f for f in spatial_files if f not in base_files]
 
@@ -120,11 +189,11 @@ if ordered_files:
                 gdfs_to_bounds.append(gdf)
                 
                 if is_base:
-                    style_color = "#28a745"  # Verde para base
+                    style_color = "#28a745"
                     fill_opacity = 0.25
                     weight = 2
                 else:
-                    style_color = "#ff3333"  # Rojo/Naranja para parcelas subidas
+                    style_color = "#ff3333"
                     fill_opacity = 0.55
                     weight = 3
 
@@ -183,7 +252,6 @@ else:
         is_base = file_name in base_files
         
         mod_time = os.path.getmtime(file_path)
-        # Se formatea la fecha únicamente en día/mes/año (DD/MM/YYYY)
         fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y")
         
         c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
@@ -192,7 +260,6 @@ else:
         c2.caption("📍 Lote Base (Campo Escuela)" if is_base else "🔹 Parcela Añadida")
         c3.text(fecha_carga)
         
-        # Protección de borrado para capa base
         if is_base:
             c4.caption("🔒 Protegido")
         else:
