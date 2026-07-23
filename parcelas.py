@@ -261,7 +261,7 @@ else:
         
         # Obtener fecha de modificación del archivo
         mod_time = os.path.getmtime(file_path)
-        fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y - %H:%M hs")
+        fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y")
         
         c1, c2, c3, c4 = st.columns([4, 3, 3, 2])
         c1.text(f"📄 {file_name}")
