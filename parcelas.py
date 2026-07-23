@@ -166,12 +166,11 @@ st_folium(m, width="100%", height=550)
 # REGISTRO Y GESTIÓN DE PARCELAS (DEBAJO DEL MAPA)
 # -----------------------------------------------------------------------------
 st.markdown("---")
-st.subheader("📋 Registro de Parcelas Cargar / Base de Datos")
+st.subheader("📋 Registro de Parcelas Cargadas / Base de Datos")
 
 if not spatial_files:
     st.info("No hay capas ni parcelas cargadas en la base de datos.")
 else:
-    # Encabezados de la tabla custom en Streamlit
     col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
     col1.markdown("**Nombre del Archivo**")
     col2.markdown("**Tipo de Capa**")
@@ -183,7 +182,6 @@ else:
         file_path = os.path.join(DATA_DIR, file_name)
         is_base = file_name in base_files
         
-        # Obtener fecha de modificación/creación del archivo
         mod_time = os.path.getmtime(file_path)
         fecha_carga = datetime.datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y %H:%M hs")
         
@@ -193,11 +191,14 @@ else:
         c2.caption("📍 Lote Base (Campo Escuela)" if is_base else "🔹 Parcela Añadida")
         c3.text(fecha_carga)
         
-        # Botón para borrar el archivo (con key única por archivo)
-        if c4.button("🗑️ Borrar", key=f"del_{file_name}"):
-            try:
-                os.remove(file_path)
-                st.toast(f"Se eliminó `{file_name}` correctamente.", icon="✅")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al borrar el archivo: {e}")
+        # Lógica de protección para la capa base
+        if is_base:
+            c4.caption("🔒 Protegido")
+        else:
+            if c4.button("🗑️ Borrar", key=f"del_{file_name}"):
+                try:
+                    os.remove(file_path)
+                    st.toast(f"Se eliminó `{file_name}` correctamente.", icon="✅")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al borrar el archivo: {e}")
