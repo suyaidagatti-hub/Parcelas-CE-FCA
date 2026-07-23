@@ -24,17 +24,15 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 
 # -----------------------------------------------------------------------------
-# FUNCION PARA LEER TANTO KML COMO KMZ
+# FUNCIÓN PARA LEER KML / KMZ
 # -----------------------------------------------------------------------------
 def load_spatial_data(file_source) -> gpd.GeoDataFrame:
     """
     Lee archivos KML o KMZ y los convierte en un GeoDataFrame.
     """
     try:
-        # 1. Si viene del uploader de Streamlit
         if hasattr(file_source, "name"):
             filename = file_source.name
-            # Guardar temporalmente para que geopandas/pyogrio lo lea bien
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
                 tmp.write(file_source.getvalue())
                 tmp_path = tmp.name
@@ -44,11 +42,8 @@ def load_spatial_data(file_source) -> gpd.GeoDataFrame:
 
         ext = os.path.splitext(filename)[1].lower()
 
-        # Si es KML
         if ext == ".kml":
             gdf = gpd.read_file(tmp_path, driver="KML")
-
-        # Si es KMZ (comprimido zip que contiene kml)
         elif ext == ".kmz":
             with zipfile.ZipFile(tmp_path, "r") as z:
                 kml_filename = [f for f in z.namelist() if f.endswith(".kml")][0]
@@ -57,7 +52,6 @@ def load_spatial_data(file_source) -> gpd.GeoDataFrame:
         else:
             return gpd.GeoDataFrame()
 
-        # Limpiar archivo temporal si se creó uno
         if hasattr(file_source, "name") and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
@@ -69,7 +63,7 @@ def load_spatial_data(file_source) -> gpd.GeoDataFrame:
 
 
 # -----------------------------------------------------------------------------
-# SIDEBAR: Carga de Nuevos Archivos (KML o KMZ)
+# SIDEBAR: Carga de Nuevos Archivos
 # -----------------------------------------------------------------------------
 st.sidebar.header("📁 Cargar Nueva Parcela")
 uploaded_file = st.sidebar.file_uploader("Sube un archivo KML o KMZ", type=["kml", "kmz"])
@@ -86,28 +80,32 @@ if uploaded_file is not None:
 
 
 # -----------------------------------------------------------------------------
-# LECTURA Y RENDERIZADO DE CAPAS
+# LECTURA Y ORDENAMIENTO DE CAPAS (Z-INDEX)
 # -----------------------------------------------------------------------------
-# Listar todos los KML y KMZ dentro de la carpeta 'data'
 spatial_files = [
     f for f in os.listdir(DATA_DIR) 
     if f.lower().endswith(".kml") or f.lower().endswith(".kmz")
 ]
 
-# Inicializar Mapa Base (Centrado inicial aproximado)
+# Separar capa BASE de capas SUBIDAS para forzar el orden de renderizado
+base_files = [f for f in spatial_files if "campo" in f.lower() or "lote" in f.lower()]
+uploaded_files = [f for f in spatial_files if f not in base_files]
+
+# El orden final garantiza que 'base' se dibuje primero (abajo) y 'subidas' al final (arriba)
+ordered_files = base_files + uploaded_files
+
+# Mapa base con vista satelital por defecto
 m = folium.Map(location=[-31.42, -64.18], zoom_start=13, tiles="OpenStreetMap")
 folium.TileLayer("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", attr="Google", name="Google Satélite").add_to(m)
 
 gdfs_to_bounds = []
 
-if spatial_files:
+if ordered_files:
     st.sidebar.subheader("🗂️ Capas Disponibles")
     
-    for file_name in spatial_files:
+    for file_name in ordered_files:
         file_path = os.path.join(DATA_DIR, file_name)
-        
-        # Identificar si es la capa base del campo escuela
-        is_base = "campo" in file_name.lower() or "lote" in file_name.lower()
+        is_base = file_name in base_files
         
         show_layer = st.sidebar.checkbox(
             f"{'📍 Base: ' if is_base else '🔹 '} {file_name}", 
@@ -120,27 +118,41 @@ if spatial_files:
             if not gdf.empty:
                 gdfs_to_bounds.append(gdf)
                 
-                # Estilos visuales opcionales
-                style_color = "#28a745" if is_base else "#ff7800"  # Verde para base, naranja para subidas
-                
+                # Configuración de colores y estilos según si es base o subida
+                if is_base:
+                    style_color = "#28a745"  # Verde para capa base
+                    fill_opacity = 0.25
+                    weight = 2
+                else:
+                    style_color = "#ff3333"  # Rojo/Naranja para parcelas subidas (mayor contraste)
+                    fill_opacity = 0.55
+                    weight = 3
+
+                # Crear capa GeoJSON
                 folium.GeoJson(
                     gdf,
                     name=file_name,
-                    style_function=lambda x, color=style_color: {
+                    style_function=lambda x, color=style_color, opacity=fill_opacity, w=weight: {
                         'fillColor': color,
                         'color': color,
-                        'weight': 2,
-                        'fillOpacity': 0.35
+                        'weight': w,
+                        'fillOpacity': opacity
+                    },
+                    # Efecto de resaltado al pasar el mouse por arriba
+                    highlight_function=lambda x: {
+                        'weight': 4,
+                        'fillOpacity': 0.85
                     },
                     tooltip=folium.GeoJsonTooltip(
-                        fields=list(gdf.columns.drop('geometry', errors='ignore'))[:3]
+                        fields=list(gdf.columns.drop('geometry', errors='ignore'))[:3],
+                        sticky=True
                     ) if len(gdf.columns) > 1 else None
                 ).add_to(m)
 
-# Centrar y encuadrar automáticamente el mapa sobre todas las capas activas
+# Centrar el mapa en el área combinada de las capas visibles
 if gdfs_to_bounds:
     combined_gdf = gpd.GeoDataFrame(pd.concat(gdfs_to_bounds, ignore_index=True))
-    bounds = combined_gdf.total_bounds  # [minx, miny, maxx, maxy]
+    bounds = combined_gdf.total_bounds
     m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
 folium.LayerControl().add_to(m)
