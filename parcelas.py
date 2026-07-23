@@ -102,23 +102,44 @@ def load_spatial_data(file_source) -> gpd.GeoDataFrame:
 
 
 # -----------------------------------------------------------------------------
-# LOGIN SENCILLO
+# LOGIN CON CREDENCIALES DESDE CSV
 # -----------------------------------------------------------------------------
+def verificar_credenciales(usuario, clave) -> bool:
+    """Verifica si el usuario y la contraseña coinciden con credenciales.csv"""
+    if not os.path.exists("credenciales.csv"):
+        st.error("No se encontró el archivo `credenciales.csv` en la raíz del proyecto.")
+        return False
+    
+    try:
+        df_creds = pd.read_csv("credenciales.csv")
+        # Aseguramos que busque coincidencia de usuario y clave exactos
+        match = df_creds[(df_creds['usuario'].astype(str) == usuario.strip()) & 
+                         (df_creds['password'].astype(str) == clave.strip())]
+        return not match.empty
+    except Exception as e:
+        st.error(f"Error al leer credenciales.csv: {e}")
+        return False
+
+
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
     st.subheader("🔑 Iniciar Sesión para Editar")
-    password = st.text_input("Contraseña de administrador:", type="password")
+    
+    col_usr, col_pwd = st.columns(2)
+    with col_usr:
+        user_input = st.text_input("Usuario:")
+    with col_pwd:
+        pass_input = st.text_input("Contraseña:", type="password")
+        
     if st.button("Ingresar"):
-        # Podés cambiar esta clave o usar st.secrets["ADMIN_PASSWORD"]
-        if password == "agro2026":
+        if verificar_credenciales(user_input, pass_input):
             st.session_state.authenticated = True
             st.rerun()
         else:
-            st.error("Contraseña incorrecta")
+            st.error("Usuario o contraseña incorrectos.")
     st.stop()
-
 
 # -----------------------------------------------------------------------------
 # PANEL LATERAL: SUBIR PARCELA
